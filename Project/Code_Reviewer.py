@@ -1,10 +1,6 @@
 import streamlit as st
 import google.generativeai as ai
-import time
 import base64
-from pygments import highlight
-from pygments.lexers import PythonLexer
-from pygments.formatters import HtmlFormatter
 from streamlit.components.v1 import html
 f = open("keys/.gemini.txt")
 
