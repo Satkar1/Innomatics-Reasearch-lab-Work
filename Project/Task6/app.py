@@ -1,112 +1,178 @@
-import streamlit as st
-import google.generativeai as genai
-from langchain_google_genai import ChatGoogleGenerativeAI
-import json
 import os
 from dotenv import load_dotenv
+from langchain_google_genai import ChatGoogleGenerativeAI
+import streamlit as st
+from langchain.chains import LLMChain
+from langchain.prompts import PromptTemplate
+import google.generativeai as genai
+import pandas as pd
+import io
+import plotly.graph_objects as go
 
-# Load API key from .env file
+# Load environment variables
 load_dotenv()
-API_KEY = os.getenv("GEMINI_API_KEY")
+gemini_api_key = os.getenv("GEMINI_API_KEY")
 
-if not API_KEY:
-    st.error("⚠️ API Key is missing! Please check your .env file.")
+if not gemini_api_key:
+    st.error("GEMINI_API_KEY not found in .env file.")
+    st.stop()
 
-# Initialize LangChain model with API key
-llm = ChatGoogleGenerativeAI(model="gemini-2.0-flash-exp", google_api_key=API_KEY)
+# Verify Gemini Flash availability
+genai.configure(api_key=gemini_api_key)
+available_models = [m.name for m in genai.list_models() if 'generateContent' in m.supported_generation_methods]
 
-# Travel booking URLs
-BOOKING_URLS = {
-    "Air India": "https://www.airindia.com/",
-    "Delta": "https://www.delta.com/",
-    "Emirates": "https://www.emirates.com/",
-    "Uber": "https://www.uber.com/global/en/price-estimate/",
-    "RedBus": "https://www.redbus.in/",
-    "IRCTC": "https://www.irctc.co.in/",
-}
+if 'models/gemini-2.0-flash-exp' not in available_models:
+    st.error("gemini-2.0-flash-exp is not available for your API key. Please check your Google Cloud project and API key.")
+    st.stop()
 
-# Function to get booking URL (fallback to Google search)
-def get_booking_url(provider):
-    return BOOKING_URLS.get(provider, f"https://www.google.com/search?q={provider}+booking")
+# Initialize Google GenAI model (Gemini Flash)
+try:
+    llm = ChatGoogleGenerativeAI(model="gemini-2.0-flash-exp", google_api_key=gemini_api_key)
+except Exception as e:
+    st.error(f"Error initializing Gemini Flash model: {e}")
+    st.stop()
 
-# Streamlit page setup
-st.set_page_config(page_title="PathPlanner-AI", layout="wide", page_icon="🌍")
+# Prompt Template
+prompt_template = PromptTemplate(
+    input_variables=["source", "destination"],
+    template="""
+    You are a travel planning assistant. Provide travel options from {source} to {destination}. 
+    Present the information in a structured table format with the following columns:
 
-# Custom styles for better UI
-st.markdown("""
-    <style>
-        body { background-color: #121212; color: white; }
-        .stApp { background-color: #1e1e1e; }
-        .stButton > button { background-color: #ff4c4c !important; color: white !important; 
-            border-radius: 10px; font-weight: bold; padding: 10px 20px; transition: 0.3s; }
-        .stButton > button:hover { background-color: #e63946 !important; }
-        .travel-card { background: #222; padding: 15px; border-radius: 10px; 
-            margin-bottom: 15px; box-shadow: 2px 2px 10px rgba(255, 255, 255, 0.1); transition: 0.3s; }
-        .travel-card:hover { transform: scale(1.03); }
-        .book-btn { background-color: #1db954; padding: 8px 15px; color: white; 
-            font-weight: bold; text-decoration: none; border-radius: 8px; display: inline-block; }
-        .book-btn:hover { background-color: #1aa34a; }
-    </style>
-""", unsafe_allow_html=True)
+    | Travel Type | Price (Estimated) | Time (Estimated) | Description | Comfort Level (1-5, 5 being highest) | Directness (Direct/Indirect) |
+    |-------------------|-------------------|-------------------|-------------|------------------------------------|-----------------------------|
+    | Cab/Taxi          |                   |                   |             |                                    |                             |
+    | Train             |                   |                   |             |                                    |                             |
+    | Bus               |                   |                   |             |                                    |                             |
+    | Flight            |                   |                   |             |                                    |                             |
+    | Ola/Uber          |                   |                   |             |                                    |                             |
 
-# Sidebar for preferences
-with st.sidebar:
-    st.markdown("## 🌍 Travel Preferences")
-    preference = st.selectbox("Choose Preference", ["Cheapest", "Fastest", "Comfortable", "Eco-friendly"])
-    sort_by = st.selectbox("Sort By", ["Default", "Lowest Price", "Shortest Duration"])
+    Fill in the table with estimated prices, travel times, descriptions, comfort levels (1-5), and directness.
+    If a mode of transport is unavailable, indicate it in the table.
+    """
+)
 
-# App header
-st.markdown("<h1 style='text-align: center; color: #ff4c4c;'>PathPlanner-AI</h1>", unsafe_allow_html=True)
-st.markdown("<h3 style='text-align: center;'>Find the best travel options with AI!</h3>", unsafe_allow_html=True)
+# LangChain LLMChain
+travel_chain = LLMChain(llm=llm, prompt=prompt_template)
 
-# Input section
-col1, col2 = st.columns(2)
-with col1:
-    source = st.text_input("Source Location", placeholder="Enter starting point")
-with col2:
-    destination = st.text_input("Destination", placeholder="Enter destination")
+# Function to generate travel recommendations
+def get_travel_recommendations(source, destination):
+    try:
+        response = travel_chain.run({"source": source, "destination": destination})
+        if isinstance(response, str):
+            return response
+        else:
+            return response["text"]
+    except Exception as e:
+        return f"An error occurred: {e}"
 
-# Button to fetch travel options
-if st.button("🔍 Find Travel Options"):
+# Streamlit UI
+st.title("AI-Powered Travel Planner")
+st.write("Find your optimal travel options!")
+
+source = st.text_input("Enter Source City:")
+destination = st.text_input("Enter Destination City:")
+
+if st.button("Get Travel Options"):
     if source and destination:
-        st.markdown(f"<h2 style='color: #1db954;'>🛫 Travel Options from {source} to {destination}</h2>", unsafe_allow_html=True)
-        with st.spinner("Finding the best travel options..."):
-            # Call Gemini API
-            response = llm.invoke(f"Suggest travel options from {source} to {destination}, preference: {preference}. Return in JSON format.")
-            response_content = response.content
-            try:
-                travel_data = json.loads(response_content.strip("```json").strip("```"))
-                st.session_state.response = travel_data
-            except json.JSONDecodeError:
-                st.error("⚠️ AI response format error. Please try again.")
+        st.write(f"Generating travel options from {source} to {destination}...")
+        recommendations = get_travel_recommendations(source, destination)
+        st.write("### Travel Recommendations:")
+        st.write(recommendations)
+        # CSV Download and Chart Generation
+        try:
+            table_data = recommendations.strip().split('\n')[2:-1]
+            rows = [row.strip().split('|')[1:-1] for row in table_data]
+            df = pd.DataFrame(rows, columns=["Travel Type", "Price (Estimated)", "Time (Estimated)", "Description", "Comfort Level", "Directness"])
 
-# Display travel options dynamically
-if "response" in st.session_state:
-    travel_data = st.session_state.response
+            # Convert Price and Time to numeric, handling potential errors
+            df["Price (Estimated)"] = pd.to_numeric(df["Price (Estimated)"].str.replace(r'[^\d\.]+', '', regex=True), errors='coerce')
+            df["Time (Estimated)"] = pd.to_numeric(df["Time (Estimated)"].str.replace(r'[^\d\.]+', '', regex=True), errors='coerce')
 
-    def show_travel_options(title, key, icon):
-        st.markdown(f"<h3 style='color: #1db954;'>{icon} {title}</h3>", unsafe_allow_html=True)
-        for item in travel_data.get(key, []):
-            provider = item["provider"]
-            price = item["price"]
-            duration = item["duration"]
-            notes = item["notes"]
-            description = item.get("description", "No description available.")
-            booking_url = item.get("booking_url", "")
+            # Create Price Chart
+            fig_price = go.Figure([go.Bar(x=df["Travel Type"], y=df["Price (Estimated)"])])
+            fig_price.update_layout(title="Price Comparison", xaxis_title="Travel Type", yaxis_title="Price")
+            st.plotly_chart(fig_price)
 
-            travel_card = f"""
-                <div class="travel-card">
-                    <h4>{provider}</h4>
-                    <p>💰 <strong>Price:</strong> {price}</p>
-                    <p>⏳ <strong>Duration:</strong> {duration}</p>
-                    <p>📌 <strong>Notes:</strong> {notes}</p>
-                    <p>ℹ️ <strong>Description:</strong> {description}</p>
-                    <a href="{booking_url}" target="_blank" class="book-btn">Book Now</a>
-                </div>
-            """
-            st.markdown(travel_card, unsafe_allow_html=True)
+            # Create Time Chart
+            fig_time = go.Figure([go.Bar(x=df["Travel Type"], y=df["Time (Estimated)"])])
+            fig_time.update_layout(title="Time Comparison", xaxis_title="Travel Type", yaxis_title="Time")
+            st.plotly_chart(fig_time)
 
-    show_travel_options("Flights", "flights", "✈️")
-    show_travel_options("Trains", "trains", "🚆")
-    show_travel_options("Buses", "buses", "🚌")
-    show_travel_options("Cabs", "cabs", "🚖")
+            # Create a combined chart
+            fig = go.Figure()
+
+            # Add Price line
+            fig.add_trace(go.Line(
+                x=df["Travel Type"],
+                y=df["Price (Estimated)"],
+                name="Price",
+                marker_color="skyblue"
+            ))
+
+            # Add Time line
+            fig.add_trace(go.Line(
+                x=df["Travel Type"],
+                y=df["Time (Estimated)"],
+                name="Time",
+                marker_color="salmon"
+            ))
+
+            # Update layout
+            fig.update_layout(
+                title="Price and Time Comparison by Travel Type",
+                xaxis_title="Travel Type",
+                yaxis_title="Value (Price/Time)",
+                barmode="group",  # Groups line for each Travel Type
+                legend=dict(
+                    orientation="h",  # Horizontal legend
+                    yanchor="bottom",
+                    y=1.02,
+                    xanchor="right",
+                    x=1
+                )
+            )
+
+            # Display the chart in Streamlit
+            st.plotly_chart(fig)
+
+            # CSV Download
+            csv_buffer = io.StringIO()
+            df.to_csv(csv_buffer, index=False)
+            st.download_button(label="Download Travel Data as CSV", data=csv_buffer.getvalue(), file_name="travel_data.csv", mime="text/csv")
+
+        except Exception as e:
+            st.error(f"Error processing data or creating charts/CSV: {e}")
+
+    else:
+        st.error("Please enter both source and destination cities.")
+
+# Add detailed project description to sidebar.
+st.sidebar.header("Project Details")
+st.sidebar.write("""
+This application utilizes LangChain and Google GenAI to provide travel recommendations. 
+Enter the source and destination cities, and the AI will generate a list of travel options.
+""")
+st.sidebar.subheader("Tech Stack")
+st.sidebar.write("""
+- Python
+- Streamlit
+- LangChain
+- Google Gemini Flash (via langchain-google-genai)
+- python-dotenv
+- pandas
+- plotly
+""")
+
+st.sidebar.subheader("Instructions")
+st.sidebar.write("""
+1. Create a `.env` file and add your GEMINI_API_KEY.
+2. Install the required libraries:
+    ```bash
+    pip install streamlit langchain-google-genai python-dotenv google-generativeai pandas plotly
+    ```
+3. Run the application:
+    ```bash
+    streamlit run `app.py`
+    ```
+""")
