@@ -23,5 +23,4 @@ An interactive AI chatbot built with **Streamlit**, **Google Gemini API**, and *
 
 ### 1️⃣ **Clone the Repository**
 ```sh
-git clone https://github.com/yourusername/ai-data-science-tutor.git
-cd ai-data-science-tutor
+git clone https://github.com/Satkar1/Innomatics-Reasearch-lab-Work/edit/main/Project/Task7.git
